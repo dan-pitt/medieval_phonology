@@ -1,0 +1,402 @@
+import re
+import unicodedata
+
+def preprocess_text(text):
+    """Convert punctuation and clean text"""
+    text = text.lower()
+    text = text.replace("'", "")
+    text = text.replace(",", " ~ ")  # Convert comma to tilde
+    text = text.replace(".", " ~ ")  # Convert period to hash
+    text = text.replace(":", " ~ ")  # Convert comma to tilde
+    text = text.replace(";", " ~ ")  # Convert comma to tilde
+
+    return text
+
+def mark_sequences(word):
+    """Convert known sequences to single character markers"""
+    # Original digraphs
+    word = re.sub(r'cch', 'C', word)
+    word = re.sub(r'ch', 'C', word)
+    word = re.sub(r'gn', 'G', word)
+    
+    # Only convert 'gu' when followed by front vowels (e,i,é)
+    word = re.sub(r'gu([ei])', r'g\1', word)
+    
+    # Only convert 'qu' when followed by vowel
+    word = re.sub(r'qu([aeiou])', r'k\1', word)
+    
+    # Original diphthongs that can be nasalized
+    word = re.sub(r'ei', 'E1', word)
+    word = re.sub(r'ai', 'A1', word)
+    word = re.sub(r'oi', 'O1', word)
+    
+    # New oral diphthongs
+    word = re.sub(r'au', 'A2', word)  # /aw/
+    word = re.sub(r'ou', 'O2', word)  # /ɔw/
+    word = re.sub(r'ieu', 'I2', word) # /iew/
+    word = re.sub(r'iu', 'I3', word)  # /iw/~/iɥ/
+    
+    # Rising diphthongs
+    word = re.sub(r'ie', 'I4', word)  # /je/
+    word = re.sub(r'ui', 'U1', word)  # /ɥi/
+    word = re.sub(r'ue', 'U2', word)  # /we/~/wø/
+    
+    # Triphthongs (mark with T prefix)
+    word = re.sub(r'eau', 'T1', word)  # /e̯aw/
+    word = re.sub(r'ieu', 'T2', word)  # /jew/
+    word = re.sub(r'ueu', 'T3', word)  # /wew/~/wøw/
+    
+    return word
+
+def is_valid_onset(cluster):
+    """Check if consonant cluster is a valid onset"""
+    if not cluster:
+        return True
+    if len(cluster) == 1:
+        return True
+    valid_clusters = ['tr', 'dr', 'pr', 'br', 'cr', 'gr', 'pl', 'bl', 'cl', 'gl', 'fl', 'vr']
+    return cluster in valid_clusters
+
+def get_syllables(word):
+    """Get syllables without making decisions about nasal consonants"""
+    word = mark_sequences(word)
+    syllables = []
+    consonants = ''
+    current_syllable = {'onset': '', 'nucleus': '', 'coda': '', 'full': ''}
+
+    i = 0
+    while i < len(word):
+        if word[i] in 'aeiouE1A1O1A2O2I2I3I4U1U2T1T2T3':
+            nucleus = word[i]
+            if i+1 < len(word) and word[i:i+2] in ['E1', 'A1', 'O1', 'A2', 'O2', 'I2', 'I3', 'I4', 'U1', 'U2']:
+                nucleus = word[i:i+2]
+                i += 1
+            elif i+1 < len(word) and word[i:i+2] in ['T1', 'T2', 'T3']:
+                nucleus = word[i:i+2]
+                i += 1
+
+            if consonants:
+                # Try to split consonants between coda and onset
+                if len(consonants) > 1:
+                    # Check if the whole cluster is valid first
+                    if is_valid_onset(consonants):
+                        current_syllable['onset'] = consonants
+                    else:
+                        # Try splitting from the beginning 
+                        split_found = False
+                        for split in range(1, len(consonants)):
+                            potential_onset = consonants[split:]
+                            if is_valid_onset(potential_onset):
+                                if syllables:  # If we have previous syllables
+                                    syllables[-1]['coda'] = consonants[:split]
+                                    syllables[-1]['full'] = syllables[-1]['full'] + consonants[:split]
+                                    current_syllable['onset'] = potential_onset
+                                else:  # If this is the first syllable, keep all consonants in onset
+                                    current_syllable['onset'] = consonants
+                                split_found = True
+                                break
+                        if not split_found:  # If no valid split found, put first consonant in coda
+                            if syllables:
+                                syllables[-1]['coda'] = consonants[0]
+                                syllables[-1]['full'] = syllables[-1]['full'] + consonants[0]
+                                current_syllable['onset'] = consonants[1:]
+                            else:  # If this is the first syllable, keep all consonants in onset
+                                current_syllable['onset'] = consonants
+                else:
+                    current_syllable['onset'] = consonants
+
+                consonants = ''
+
+            current_syllable['nucleus'] = nucleus
+            current_syllable['full'] = current_syllable['onset'] + nucleus
+            syllables.append(current_syllable)
+            current_syllable = {'onset': '', 'nucleus': '', 'coda': '', 'full': ''}
+        else:
+            consonants += word[i]
+        i += 1
+
+    if consonants and syllables:
+        syllables[-1]['coda'] = consonants
+        syllables[-1]['full'] = syllables[-1]['full'] + consonants
+
+    return syllables
+
+def is_nasal(consonants):
+    """Check if consonant cluster contains a nasal"""
+    return any(c in consonants for c in 'nm')
+
+def has_following_vowel(words, word_idx, syll_idx):
+    """Check if followed by vowel, including across word boundaries"""
+    if word_idx >= len(words):
+        return False
+    
+    current_word = words[word_idx]
+    
+    # Check within same word
+    if syll_idx < len(current_word) - 1:
+        next_syll = current_word[syll_idx + 1]
+        next_onset = next_syll['onset']
+        if not next_onset or next_onset[0] in 'aeiou':
+            return True
+    
+    # Check next word
+    elif word_idx < len(words) - 1 and syll_idx == len(current_word) - 1:
+        next_word = words[word_idx + 1]
+        if next_word:
+            next_onset = next_word[0]['onset']
+            if next_onset.startswith('ˈ'):
+                next_onset = next_onset[1:]
+            if not next_onset or next_onset[0] in 'aeiou':
+                return True
+    
+    return False
+
+def process_nasal_context(syllables, word_idx, syll_idx, words):
+    """Process nasal consonants based on following context"""
+    syll = syllables[syll_idx]
+    
+    # First, check for nasals in onset of next syllable
+    if syll_idx < len(syllables) - 1:
+        next_syll = syllables[syll_idx + 1]
+        if is_nasal(next_syll['onset']):
+            # Move nasal to coda of current syllable if not before vowel
+            nasal = next((c for c in next_syll['onset'] if c in 'nm'), None)
+            if nasal:
+                syll['coda'] = nasal
+                next_syll['onset'] = next_syll['onset'].replace(nasal, '', 1)
+    
+    # Then check current syllable's coda
+    if is_nasal(syll['coda']):
+        # Always nasalize the vowel (existing nasalization rules stay the same)
+        if syll['nucleus'] == 'a':
+            syll['nucleus'] = 'ɑ̃'
+        elif syll['nucleus'] == 'A1':
+            syll['nucleus'] = 'ɑ̃ĩ'
+        elif syll['nucleus'] == 'E1':
+            syll['nucleus'] = 'ɛ̃ĩ'
+        elif syll['nucleus'] == 'O1':
+            syll['nucleus'] = 'õĩ'
+        elif syll['nucleus'] in ['e', 'ə', 'ɛ']:
+            syll['nucleus'] = 'ɛ̃'
+        elif syll['nucleus'] == 'I4':  
+            syll['nucleus'] = 'I4n'
+        elif syll['nucleus'] == 'U1':  
+            syll['nucleus'] = 'U1n'
+        elif syll['nucleus'] == 'U2':  
+            syll['nucleus'] = 'U2n'
+        else:
+            syll['nucleus'] = syll['nucleus'] + '̃'
+        
+        # Check if nasal is part of nt cluster (new code)
+        nasal = next((c for c in syll['coda'] if c in 'nm'), None)
+        if nasal:
+            remaining_coda = syll['coda'].replace(nasal, '', 1)
+            if remaining_coda.startswith('t'):
+                # If it's an nt cluster, delete both n and t
+                syll['coda'] = remaining_coda[1:]
+            elif not has_following_vowel(words, word_idx, syll_idx):
+                # Otherwise follow normal nasal deletion rules
+                syll['coda'] = syll['coda'].replace(nasal, '')
+
+def apply_nasal_rules(words_syllables):
+    """Apply nasal rules across all words"""
+    for word_idx, syllables in enumerate(words_syllables):
+        for syll_idx in range(len(syllables)):
+            process_nasal_context(syllables, word_idx, syll_idx, words_syllables)
+
+def assign_stress(syllables):
+    """Assign stress to syllables"""
+    if not syllables:
+        return -1
+
+    if len(syllables) == 1:
+        if syllables[0]['full'].endswith(('es', 'et')):
+            return -1
+        return 0
+
+    # Check for triphthongs - they always stress the middle vowel
+    for i, syll in enumerate(syllables):
+        if syll['nucleus'] in ['T1', 'T2', 'T3']:
+            return i
+
+    final = syllables[-1]['full']
+    if not final.endswith(('es', 'et')):
+        if any(vs in final for vs in ['E1', 'A1', 'O1', 'A2', 'O2', 'I2', 'I3', 'I4', 'U1', 'U2']) or (len(syllables[-1]['coda']) > 0):
+            return -1  # Ultimate stress
+    return -2  # Default penultimate stress
+
+def apply_vowel_quality(syllables, stress_idx):
+    """Apply vowel quality rules"""
+    actual_stress = len(syllables) + stress_idx if stress_idx < 0 else stress_idx
+    for i, syll in enumerate(syllables):
+        # Skip diphthongs and triphthongs
+        if any(vs in syll['nucleus'] for vs in ['E1', 'A1', 'O1', 'A2', 'O2', 'I2', 'I3', 'I4', 'U1', 'U2', 'T1', 'T2', 'T3']):
+            continue
+        if 'e' in syll['nucleus']:
+            if i == actual_stress:
+                syll['nucleus'] = syll['nucleus'].replace('e', 'ɛ')
+            else:
+                syll['nucleus'] = syll['nucleus'].replace('e', 'ə')
+
+def build_word(syllables, stress_idx):
+    """Build word with stress"""
+    actual_stress = len(syllables) + stress_idx if stress_idx < 0 else stress_idx
+    result = ''
+    for i, syll in enumerate(syllables):
+        if i == actual_stress:
+            result += 'ˈ'
+        result += syll['onset'] + syll['nucleus'] + syll['coda']
+    return result
+
+def convert_sequences(text):
+    """Convert special sequences to IPA"""
+    maps = {
+        'C': 'tʃ',     # ch
+        'G': 'ɲ',      # gn
+        
+        # Original diphthongs
+        'E1': 'ei',    # ei
+        'A1': 'ai',    # ai
+        'O1': 'oi',    # oi
+        
+        # New oral diphthongs
+        'A2': 'aw',    # au
+        'O2': 'ɔw',    # ou
+        'I2': 'iew',   # ieu
+        'I3': 'iw',    # iu (can alternate with iɥ)
+        
+        # Rising diphthongs
+        'I4': 'je',    # ie
+        'U1': 'wi',    # ui
+        'U2': 'we',    # ue (can alternate with wø)
+        
+        # Triphthongs
+        'T1': 'e̯aw',   # eau
+        'T2': 'jew',   # ieu
+        'T3': 'wew',   # ueu (can alternate with wøw)
+        
+        # Other sequences
+        'z': 'ts',
+    }
+    
+    # Handle nasalized versions
+    nasal_maps = {
+        'E1n': 'ɛ̃j',   # ein
+        'O1n': 'õj',   # oing
+        'I4n': 'jɛ̃',   # ien
+        'U1n': 'wĩ',   # uin
+        'U2n': 'wɛ̃',   # uen
+    }
+    
+    # First apply nasal mappings (they're more specific)
+    for marker, ipa in nasal_maps.items():
+        text = text.replace(marker, ipa)
+    
+    # Then apply regular mappings
+    for marker, ipa in maps.items():
+        text = text.replace(marker, ipa)
+        
+    return text
+
+def apply_final_rules(text):
+    """Apply final phonological rules"""
+    words = text.split()
+    result = []
+    for i, word in enumerate(words):
+        # Delete t in nt clusters before lenition
+        word = re.sub(r'nt([aeiouəɛɑ̃ɛ̃ãĩẽĩõĩ])', r'n\1', word)
+        
+        # Rest of existing lenition rules
+        if i < len(words) - 1:
+            next_word = words[i + 1]
+            if next_word.startswith('ˈ'):
+                next_word = next_word[1:]
+            next_has_vowel = next_word and next_word[0] in 'aeiouəɛɑ̃ɛ̃ãĩẽĩõĩ'
+            if word[-1] in 'td' and not (len(word) >= 2 and (word[-2] in 'bcdfgklmnpqrstvwxz' or word.endswith(('es', 'et')))):
+                if next_has_vowel:
+                    word = word[:-1] + 'ð'
+                else:
+                    if word.endswith('t'):
+                        word = word[:-1] + 'θ'
+                    elif word.endswith('d'):
+                        word = word[:-1] + 'ð'
+
+        # Handle intervocalic t/d
+        pattern = r'([aeiouəɛɑ̃ɛ̃ãĩẽĩõĩ]̃?)t([aeiouəɛɑ̃ɛ̃ãĩẽĩõĩ]̃?)'
+        while re.search(pattern, word):
+            word = re.sub(pattern, r'\1θ\2', word)
+
+        # Other phonological rules
+        rules = [
+            (r'll', 'l'),
+            (r'j', 'dʒ'),
+            (r'é', 'e'),
+            (r'([aeiouəɛɑ̃ɛ̃ãĩẽĩõĩ]̃?)d([aeiouəɛɑ̃ɛ̃ãĩẽĩõĩ]̃?)', r'\1ð\2'),
+            (r'c([a])', r'tʃ\1'),  # c -> tʃ before /a/
+            (r'c([eiəɛĩẽ])', r'ts\1'),  # c -> tʃ before /a/
+            (r'g([eiəɛĩẽ])', r'dʒ\1'),  # g -> dʒ before front vowels
+            (r'qu', 'k'),
+            (r'ï', 'i'),
+            (r'ë', 'e'),
+            (r'ä', 'a'),
+            (r'ü', 'u'),
+            (r'ö', 'o'),
+            (r'q', 'k'),
+            (r'u', 'y'),
+            (r'c', 'k'),
+            (r'g', 'ɡ'),
+        ]
+        for pattern, replacement in rules:
+            word = re.sub(pattern, replacement, word)
+
+        # Remove stress from words of 2 letters or less
+        base_length = len(''.join(c for c in word.replace('ˈ', '') 
+                                 if not unicodedata.combining(c) 
+                                 and c not in 'ʃðθɲɛəɑ̃ĩẽõ'))
+        if base_length <= 2:
+            word = word.replace('ˈ', '')
+
+        result.append(word)
+    return ' '.join(result)
+
+def phonemize_old_french(text):
+    """Main function to convert Old French text to IPA"""
+    text = preprocess_text(text)
+    tokens = [t for t in text.split() if t]
+    words_syllables = []
+    result_tokens = []
+    
+    # Build syllable structures just for actual words
+    for token in tokens:
+        if token in ['~', '#']:
+            continue
+        syllables = get_syllables(token)
+        words_syllables.append(syllables)
+    
+    # Apply nasal rules considering word boundaries
+    apply_nasal_rules(words_syllables)
+    
+    # First convert all words to IPA but don't apply final rules yet
+    words = []
+    for syllables in words_syllables:
+        stress_idx = assign_stress(syllables)
+        apply_vowel_quality(syllables, stress_idx)
+        word_with_stress = build_word(syllables, stress_idx)
+        word_with_stress = convert_sequences(word_with_stress)
+        words.append(word_with_stress)
+    
+    # Now build final result with separators and apply final rules to all words at once
+    for i, token in enumerate(tokens):
+        if token in ['~', '#']:
+            result_tokens.append(token)
+        else:
+            result_tokens.append(words[len([t for t in tokens[:i] if t not in ['~', '#']])])
+    
+    # Return the result with tildes surrounding the final text
+    final_result = apply_final_rules(' '.join(result_tokens))
+    return f"~ {final_result} ~"  # Wrap the final result with tildes
+
+# Test the phonemizer with examples
+example_text = "quatre cents"
+phonemized_text = phonemize_old_french(example_text)
+print(phonemized_text)
