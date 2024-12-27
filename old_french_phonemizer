@@ -5,10 +5,12 @@ def preprocess_text(text):
     """Convert punctuation and clean text"""
     text = text.lower()
     text = text.replace("'", "")
-    text = text.replace(",", " ~ ")  # Convert comma to tilde
-    text = text.replace(".", " ~ ")  # Convert period to hash
-    text = text.replace(":", " ~ ")  # Convert comma to tilde
-    text = text.replace(";", " ~ ")  # Convert comma to tilde
+    text = text.replace(",", " ~ ")
+    text = text.replace(".", " ~ ")
+    text = text.replace(":", " ~ ")
+    text = text.replace(";", " ~ ")
+    text = text.replace("»", " ~ ")
+    text = text.replace("«", " ~ ")
 
     return text
 
@@ -266,13 +268,13 @@ def convert_sequences(text):
         'I3': 'iw',    # iu (can alternate with iɥ)
         
         # Rising diphthongs
-        'I4': 'je',    # ie
+        'I4': 'ie',    # ie
         'U1': 'wi',    # ui
         'U2': 'we',    # ue (can alternate with wø)
         
         # Triphthongs
         'T1': 'e̯aw',   # eau
-        'T2': 'jew',   # ieu
+        'T2': 'iew',   # ieu
         'T3': 'wew',   # ueu (can alternate with wøw)
         
         # Other sequences
@@ -281,9 +283,9 @@ def convert_sequences(text):
     
     # Handle nasalized versions
     nasal_maps = {
-        'E1n': 'ɛ̃j',   # ein
-        'O1n': 'õj',   # oing
-        'I4n': 'jɛ̃',   # ien
+        'E1n': 'ɛ̃ĩ',   # ein
+        'O1n': 'õĩ',   # oing
+        'I4n': 'ĩɛ̃',   # ien
         'U1n': 'wĩ',   # uin
         'U2n': 'wɛ̃',   # uen
     }
@@ -341,6 +343,7 @@ def apply_final_rules(text):
             (r'ä', 'a'),
             (r'ü', 'u'),
             (r'ö', 'o'),
+            (r'ç', 'ts'),
             (r'q', 'k'),
             (r'u', 'y'),
             (r'c', 'k'),
@@ -397,6 +400,6 @@ def phonemize_old_french(text):
     return f"~ {final_result} ~"  # Wrap the final result with tildes
 
 # Test the phonemizer with examples
-example_text = "quatre cents"
+example_text = "Dient paien: «Issi poet il ben estre!» "
 phonemized_text = phonemize_old_french(example_text)
 print(phonemized_text)
